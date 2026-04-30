@@ -1,0 +1,918 @@
+@model MapPin.Common.DashboardPageModel
+@inject ITextLocalizer Localizer
+@{
+    ViewData["Title"] = "Müşteri Haritası";
+    ViewData["PageId"] = "Dashboard";
+}
+
+@section Head {
+    @Html.StyleBundle("Pages/Dashboard")
+    @Html.ScriptBundle("Pages/Dashboard")
+}
+
+<style>
+    .map-layout {
+        display: flex;
+        gap: 12px;
+        height: calc(100vh - 60px);
+    }
+
+    #customer-map {
+        flex: 1 1 0;
+        min-width: 0;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    }
+
+
+    /* Yükleniyor göstergesi */
+    .border-loader {
+        position: absolute;
+        bottom: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 1000;
+        background: rgba(44,62,80,0.82);
+        color: #fff;
+        border-radius: 20px;
+        padding: 4px 14px;
+        font-size: 11px;
+        display: none;
+        pointer-events: none;
+    }
+
+    /* Panel */
+    .map-panel {
+        width: 320px;
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        background: #fff;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+        overflow: hidden;
+    }
+
+    .panel-header {
+        background: #2c3e50;
+        color: #fff;
+        padding: 12px 14px;
+        flex-shrink: 0;
+    }
+
+    .panel-header h6 { margin: 0; font-size: 14px; font-weight: 600; }
+
+    .panel-filters {
+        padding: 10px 14px;
+        border-bottom: 1px solid #e9ecef;
+        flex-shrink: 0;
+        background: #f8f9fa;
+    }
+
+    .panel-actions {
+        padding: 8px 14px;
+        border-bottom: 1px solid #e9ecef;
+        flex-shrink: 0;
+    }
+
+    .panel-content { flex: 1; overflow-y: auto; }
+
+    .customer-list-empty {
+        padding: 32px 16px;
+        text-align: center;
+        color: #adb5bd;
+        font-size: 12px;
+    }
+
+    .customer-item {
+        padding: 10px 14px;
+        border-bottom: 1px solid #f1f3f5;
+        cursor: pointer;
+        transition: background 0.15s;
+    }
+
+    .customer-item:hover { background: #f8f9fa; }
+    .customer-item:last-child { border-bottom: none; }
+    .customer-item .ci-name { font-size: 13px; font-weight: 600; color: #2c3e50; margin-bottom: 2px; }
+    .customer-item .ci-loc  { font-size: 11px; color: #6c757d; }
+    .customer-item .ci-phone{ font-size: 11px; color: #6c757d; }
+    .customer-item .ci-edit {
+        float: right; font-size: 11px; color: #3498db;
+        cursor: pointer; padding: 0 2px;
+    }
+    .customer-item .ci-edit:hover { color: #1a6fa8; }
+
+    .customer-popup .popup-edit {
+        display: block; margin-top: 6px;
+        font-size: 11px; color: #3498db; cursor: pointer;
+        text-decoration: underline;
+    }
+
+    .panel-form {
+        display: none;
+        padding: 14px;
+        border-top: 2px solid #27ae60;
+        flex-shrink: 0;
+    }
+
+    .panel-form.open { display: block; }
+    .panel-form .form-label { font-size: 12px; margin-bottom: 3px; }
+
+    .list-count-badge {
+        background: #2c3e50;
+        color: #fff;
+        border-radius: 10px;
+        font-size: 10px;
+        padding: 1px 7px;
+        margin-left: 6px;
+    }
+
+    #geocode-spinner { display: none; margin-left: 6px; }
+
+    .customer-popup h6 { margin: 0 0 3px; font-weight: 600; font-size: 13px; }
+    .customer-popup p  { margin: 1px 0; font-size: 11px; color: #555; }
+
+    .cluster-icon {
+        width: 36px;
+        height: 36px;
+        background: #e74c3c;
+        color: #fff;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+        font-weight: 700;
+        border: 3px solid #fff;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    }
+</style>
+
+<div class="map-layout">
+
+    <!-- SOL: Harita -->
+    <div class="position-relative" style="flex:1;min-width:0;">
+
+
+        <!-- Sınır yükleniyor göstergesi -->
+        <div class="border-loader" id="border-loader">
+            <i class="fa fa-spinner fa-spin me-1"></i> Sınırlar yükleniyor...
+        </div>
+
+        <!-- İlçe sınırlarını kaldır butonu -->
+        <button id="btn-clear-districts" onclick="clearDistrictLayer()"
+                style="display:none;position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:1000;
+                       background:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:500;
+                       box-shadow:0 2px 6px rgba(0,0,0,0.2);cursor:pointer;color:#c0392b;">
+            <i class="fa fa-times me-1"></i> Sınırları Kaldır
+        </button>
+
+        <div id="customer-map" style="height:100%;width:100%;"></div>
+    </div>
+
+    <!-- SAĞ: Panel -->
+    <div class="map-panel">
+
+        <div class="panel-header">
+            <h6><i class="fa fa-users me-2"></i>Müşteriler</h6>
+        </div>
+
+        <div class="panel-filters">
+            <div class="mb-2">
+                <label class="form-label form-label-sm fw-semibold mb-1">
+                    İl
+                    <span id="geocode-spinner"><i class="fa fa-spinner fa-spin fa-sm"></i></span>
+                </label>
+                <select class="form-select form-select-sm" id="sel-il">
+                    <option value="">— Tümü —</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label form-label-sm fw-semibold mb-1">İlçe</label>
+                <select class="form-select form-select-sm" id="sel-ilce" disabled>
+                    <option value="">— Tümü —</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="panel-actions d-flex align-items-center justify-content-between">
+            <span class="text-muted" style="font-size:12px;">
+                Müşteriler <span class="list-count-badge" id="list-count">0</span>
+            </span>
+            <button class="btn btn-sm btn-success" id="btn-toggle-form">
+                <i class="fa fa-plus me-1"></i>Yeni Müşteri
+            </button>
+        </div>
+
+        <div class="panel-content" id="customer-list-container">
+            <div class="customer-list-empty" id="list-empty-msg">
+                <i class="fa fa-map-marker fa-2x mb-2 d-block" style="color:#ddd;"></i>
+                İl ve ilçe seçin
+            </div>
+        </div>
+
+        <div class="panel-form" id="panel-form">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <span class="fw-semibold" style="font-size:13px;" id="form-title">
+                    <i class="fa fa-user-plus me-1 text-success"></i>Yeni Müşteri
+                </span>
+                <button class="btn btn-sm btn-link text-muted p-0" id="btn-cancel-form">
+                    <i class="fa fa-times"></i>
+                </button>
+            </div>
+            <input type="hidden" id="inp-customer-id" value="" />
+            <div class="mb-2">
+                <label class="form-label">Müşteri Adı <span class="text-danger">*</span></label>
+                <input type="text" class="form-control form-control-sm" id="inp-name" placeholder="Firma veya kişi adı" />
+            </div>
+            <div class="mb-2">
+                <label class="form-label">İletişim Kişisi</label>
+                <input type="text" class="form-control form-control-sm" id="inp-contact" />
+            </div>
+            <div class="row g-1 mb-2">
+                <div class="col-6">
+                    <label class="form-label">İl</label>
+                    <input type="text" class="form-control form-control-sm" id="inp-city" />
+                </div>
+                <div class="col-6">
+                    <label class="form-label">İlçe</label>
+                    <input type="text" class="form-control form-control-sm" id="inp-district" />
+                </div>
+            </div>
+            <div class="row g-1 mb-2">
+                <div class="col-6">
+                    <label class="form-label">Telefon</label>
+                    <input type="text" class="form-control form-control-sm" id="inp-phone" />
+                </div>
+                <div class="col-6">
+                    <label class="form-label">E-posta</label>
+                    <input type="email" class="form-control form-control-sm" id="inp-email" />
+                </div>
+            </div>
+            <div class="mb-2">
+                <label class="form-label">Notlar</label>
+                <textarea class="form-control form-control-sm" id="inp-notes" rows="2"></textarea>
+            </div>
+            <div id="save-error" class="alert alert-danger py-1 px-2 mb-2" style="display:none;font-size:11px;"></div>
+            <button class="btn btn-success btn-sm w-100" id="btn-save">
+                <i class="fa fa-save me-1"></i>Kaydet
+            </button>
+        </div>
+
+    </div>
+</div>
+
+<script nonce="@Html.CspNonce()">
+(function () {
+
+    // ── Yardımcılar ───────────────────────────────────────────────
+    function getCsrfToken() {
+        var m = document.cookie.match(/(?:^|;\s*)CSRF-TOKEN=([^;]*)/);
+        return m ? decodeURIComponent(m[1]) : '';
+    }
+    function postJson(url, body) {
+        return fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': getCsrfToken() },
+            body: JSON.stringify(body)
+        });
+    }
+    // Nominatim sonuçları arasından en iyi sınır geometrisini seç
+    function bestGeom(res) {
+        if (!res || !res.length) return null;
+        var isPolygon = function (g) {
+            return g && g.type !== 'Point' && g.type !== 'MultiPoint';
+        };
+        // Önce class=boundary olanı ara
+        for (var i = 0; i < res.length; i++) {
+            if (res[i].class === 'boundary' && isPolygon(res[i].geojson))
+                return res[i].geojson;
+        }
+        // Sonra type=administrative olanı ara
+        for (var i = 0; i < res.length; i++) {
+            if (res[i].type === 'administrative' && isPolygon(res[i].geojson))
+                return res[i].geojson;
+        }
+        // Hâlâ bulunamazsa polygon olan ilk sonucu al
+        for (var i = 0; i < res.length; i++) {
+            if (isPolygon(res[i].geojson)) return res[i].geojson;
+        }
+        return null;
+    }
+
+    function esc(s) {
+        return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+    function showLoader(v) {
+        document.getElementById('border-loader').style.display = v ? 'block' : 'none';
+    }
+
+    // ── Tile katmanı ──────────────────────────────────────────────
+    var politicalTile = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+        maxZoom: 19,
+        attribution: '© <a href="https://carto.com">CARTO</a> © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    });
+
+    // ── Harita ────────────────────────────────────────────────────
+    var map = L.map('customer-map', { zoomControl: true }).setView([39.0, 35.5], 6);
+    politicalTile.addTo(map);
+
+    var allMarkers = L.markerClusterGroup({
+        maxClusterRadius: 40,
+        iconCreateFunction: function (cluster) {
+            var count = cluster.getChildCount();
+            return L.divIcon({
+                html: '<div class="cluster-icon">' + count + '</div>',
+                className: '',
+                iconSize: [36, 36],
+                iconAnchor: [18, 18]
+            });
+        }
+    });
+    map.addLayer(allMarkers);
+    var pinIcon = L.divIcon({
+        html: '<div class="cluster-icon">1</div>',
+        className: '',
+        iconSize: [36, 36],
+        iconAnchor: [18, 18],
+        popupAnchor: [0, -18]
+    });
+
+    var pinIconApprox = L.divIcon({
+        html: '<div class="cluster-icon" style="background:#95a5a6;border-color:#7f8c8d;"><i class="fa fa-map-marker"></i></div>',
+        className: '',
+        iconSize: [36, 36],
+        iconAnchor: [18, 18],
+        popupAnchor: [0, -18]
+    });
+
+    // ── Katman değişkenleri ───────────────────────────────────────
+    var ilLayer            = null;   // tüm il sınırları (startup)
+    var districtLayer      = null;   // seçili ilin ilçe sınırları
+    var approximateCenters = {};     // { "il" | "il|ilçe" → {lat,lng} }
+
+    // İl sınırları stili
+    var ilStyle       = { color: '#c0392b', weight: 1.5, opacity: 0.8, fillColor: '#e74c3c', fillOpacity: 0.03 };
+    var ilHover       = { fillColor: '#e74c3c', fillOpacity: 0.15 };
+    var ilSelected    = { color: '#c0392b', weight: 2.5, opacity: 1, fillColor: '#e74c3c', fillOpacity: 0.08 };
+
+    // İlçe sınırları stili
+    var districtStyle = { color: '#2980b9', weight: 1, opacity: 0.7, fillColor: '#3498db', fillOpacity: 0.03 };
+    var districtHover = { fillColor: '#3498db', fillOpacity: 0.15 };
+
+
+    // ── Tüm il sınırlarını yükle (lokal statik dosyadan) ─────────────
+    function loadIlLayer() {
+        if (ilLayer) return;
+
+        ilLayer = L.geoJSON(null, {
+            style: ilStyle,
+            onEachFeature: function (feature, layer) {
+                var name = feature.properties.name || '';
+                layer.on('mouseover', function (e) {
+                    if (layer.setStyle) layer.setStyle(ilHover);
+                    if (name) L.popup({ closeButton: false, offset: [0, -4] })
+                        .setLatLng(e.latlng)
+                        .setContent('<strong style="font-size:12px;">' + esc(name) + '</strong>')
+                        .openOn(map);
+                });
+                layer.on('mouseout', function () {
+                    if (layer.setStyle && ilLayer) ilLayer.resetStyle(layer);
+                    map.closePopup();
+                });
+                layer.on('click', function (e) {
+                    L.DomEvent.stopPropagation(e);
+                    map.closePopup();
+                    var matched = findIl(name);
+                    if (!matched) return;
+                    var selIl = document.getElementById('sel-il');
+                    selIl.value = matched;
+                    selIl.dispatchEvent(new Event('change'));
+                });
+            }
+        }).addTo(map);
+
+        fetch('/Content/turkey-il-borders.json')
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                (data.features || []).forEach(function (f) { ilLayer.addData(f); });
+            })
+            .catch(function () {});
+    }
+
+    // ── İlçe sınırlarını yükle ────────────────────────────────────
+    function loadDistrictLayer(il) {
+        if (districtLayer) { map.removeLayer(districtLayer); districtLayer = null; }
+        document.getElementById('btn-clear-districts').style.display = 'none';
+        if (!il) return;
+
+        var features = ilceBordersData[il] || [];
+        var geoJSON = { type: 'FeatureCollection', features: features };
+        buildLayers(il, geoJSON);
+    }
+
+    window.clearDistrictLayer = function () {
+        if (districtLayer) { map.removeLayer(districtLayer); districtLayer = null; }
+        document.getElementById('btn-clear-districts').style.display = 'none';
+        var selIlce = document.getElementById('sel-ilce');
+        selIlce.value = '';
+        selIlce.dispatchEvent(new Event('change'));
+    };
+
+    // ── İlçe katmanı + Turf union ile il sınırı ───────────────────
+    function buildLayers(il, geoJSON) {
+        // İlçe katmanı
+        districtLayer = L.geoJSON(geoJSON, {
+            style: districtStyle,
+            onEachFeature: function (feature, layer) {
+                var name = feature.properties.name || '';
+                layer.on('mouseover', function (e) {
+                    if (layer.setStyle) layer.setStyle(districtHover);
+                    if (name) L.popup({ closeButton: false, offset: [0, -4] })
+                        .setLatLng(e.latlng)
+                        .setContent('<span style="font-size:11px;font-weight:600;">' + esc(name) + '</span>')
+                        .openOn(map);
+                });
+                layer.on('mouseout', function () {
+                    if (layer.setStyle && districtLayer) districtLayer.resetStyle(layer);
+                    map.closePopup();
+                });
+                layer.on('click', function (e) {
+                    L.DomEvent.stopPropagation(e);
+                    var selIlce = document.getElementById('sel-ilce');
+                    if (!selIlce.disabled) {
+                        selIlce.value = name;
+                        selIlce.dispatchEvent(new Event('change'));
+                    }
+                });
+            }
+        }).addTo(map);
+
+        document.getElementById('btn-clear-districts').style.display = 'block';
+    }
+
+    // ── Bölge/il/ilçe verisi ──────────────────────────────────────
+    var ilIlceData = {};
+    var ilceBordersData = {};   // { ilAdı: FeatureCollection }
+    var allCustomers = [];
+    var selectedLat = null, selectedLng = null;
+
+    // İlçe GeoJSON'undan il/ilçe merkez koordinatlarını hesapla
+    function buildApproximateCenters() {
+        approximateCenters = {};
+        Object.keys(ilceBordersData).forEach(function (il) {
+            var features = ilceBordersData[il] || [];
+            var cityLats = [], cityLngs = [];
+
+            features.forEach(function (f) {
+                var distName = (f.properties && f.properties.name) || '';
+                var lats = [], lngs = [];
+
+                function collectCoords(coords) {
+                    if (!coords || !coords.length) return;
+                    if (typeof coords[0][0] === 'number') {
+                        coords.forEach(function (pt) { lngs.push(pt[0]); lats.push(pt[1]); });
+                    } else {
+                        coords.forEach(collectCoords);
+                    }
+                }
+
+                if (f.geometry && f.geometry.coordinates)
+                    collectCoords(f.geometry.coordinates);
+
+                if (lats.length) {
+                    var clat = lats.reduce(function (a, b) { return a + b; }, 0) / lats.length;
+                    var clng = lngs.reduce(function (a, b) { return a + b; }, 0) / lngs.length;
+                    if (distName)
+                        approximateCenters[il.toLowerCase() + '|' + distName.toLowerCase()] = { lat: clat, lng: clng };
+                    cityLats = cityLats.concat(lats);
+                    cityLngs = cityLngs.concat(lngs);
+                }
+            });
+
+            if (cityLats.length)
+                approximateCenters[il.toLowerCase()] = {
+                    lat: cityLats.reduce(function (a, b) { return a + b; }, 0) / cityLats.length,
+                    lng: cityLngs.reduce(function (a, b) { return a + b; }, 0) / cityLngs.length
+                };
+        });
+    }
+
+    // İl-ilçe dropdown verisi + ilçe sınır dosyasını paralel yükle
+    Promise.all([
+        fetch('/Content/il-ilce.json').then(function (r) { return r.json(); }),
+        fetch('/Content/turkey-ilce-borders.json').then(function (r) { return r.json(); })
+    ]).then(function (results) {
+        ilIlceData = results[0];
+        ilceBordersData = results[1];
+        buildApproximateCenters();
+        populateIlDropdown();
+        refreshMapMarkers(); // koordinatsız müşterileri artık yaklaşık konumla göster
+    });
+
+    // İl dropdown'ı doldur
+    function populateIlDropdown() {
+        var selIl = document.getElementById('sel-il');
+        selIl.innerHTML = '<option value="">— Tümü —</option>';
+        Object.keys(ilIlceData).sort().forEach(function (il) {
+            var opt = document.createElement('option');
+            opt.value = il; opt.textContent = il;
+            selIl.appendChild(opt);
+        });
+    }
+
+    function overpassToFeatures(data) {
+        var result = [];
+        (data.elements || []).forEach(function (el) {
+            if (el.type !== 'relation') return;
+            var name = (el.tags && el.tags.name) || '';
+            var outers = (el.members || []).filter(function (m) {
+                return m.role === 'outer' && m.geometry && m.geometry.length >= 2;
+            }).map(function (m) {
+                return m.geometry.map(function (p) { return [p.lon, p.lat]; });
+            });
+            var inners = (el.members || []).filter(function (m) {
+                return m.role === 'inner' && m.geometry && m.geometry.length >= 2;
+            }).map(function (m) {
+                return m.geometry.map(function (p) { return [p.lon, p.lat]; });
+            });
+            if (!outers.length) return;
+            var rings = buildRings(outers).concat(buildRings(inners));
+            if (!rings.length) return;
+            result.push({
+                type: 'Feature',
+                properties: { name: name },
+                geometry: { type: 'Polygon', coordinates: rings }
+            });
+        });
+        return result;
+    }
+
+    function buildRings(ways) {
+        var rings = [], rem = ways.map(function (w) { return w.slice(); });
+        while (rem.length) {
+            var ring = rem.shift();
+            var changed = true;
+            while (changed) {
+                changed = false;
+                var tail = ring[ring.length - 1];
+                for (var i = 0; i < rem.length; i++) {
+                    var w = rem[i];
+                    if (ptNear(tail, w[0])) {
+                        ring = ring.concat(w.slice(1)); rem.splice(i, 1); changed = true; break;
+                    }
+                    if (ptNear(tail, w[w.length - 1])) {
+                        ring = ring.concat(w.slice(0, -1).reverse()); rem.splice(i, 1); changed = true; break;
+                    }
+                }
+            }
+            if (!ptNear(ring[0], ring[ring.length - 1])) ring.push(ring[0]);
+            if (ring.length >= 4) rings.push(ring);
+        }
+        return rings;
+    }
+
+    function ptNear(a, b) {
+        return Math.abs(a[0] - b[0]) < 0.0001 && Math.abs(a[1] - b[1]) < 0.0001;
+    }
+
+    // ── İl dropdown ───────────────────────────────────────────────
+    document.getElementById('sel-il').addEventListener('change', function () {
+        var il = this.value;
+        var selIlce = document.getElementById('sel-ilce');
+        selIlce.innerHTML = '<option value="">— Tümü —</option>';
+
+        if (il && ilIlceData[il]) {
+            selIlce.disabled = false;
+            ilIlceData[il].forEach(function (ilce) {
+                var opt = document.createElement('option');
+                opt.value = ilce; opt.textContent = ilce;
+                selIlce.appendChild(opt);
+            });
+            loadDistrictLayer(il);
+            flyToPlace(il + ', Türkiye', 9);
+        } else {
+            selIlce.disabled = true;
+            if (districtLayer) { map.removeLayer(districtLayer); districtLayer = null; }
+            if (ilLayer && !map.hasLayer(ilLayer)) map.addLayer(ilLayer);
+        }
+
+        selectedLat = null; selectedLng = null;
+        refreshList();
+    });
+
+    // ── İlçe dropdown ─────────────────────────────────────────────
+    document.getElementById('sel-ilce').addEventListener('change', function () {
+        var il   = document.getElementById('sel-il').value;
+        var ilce = this.value;
+        refreshList();
+
+        var q = ilce ? ilce + ', ' + il + ', Türkiye' : il + ', Türkiye';
+        var zoom = ilce ? 11 : 9;
+        flyToPlace(q, zoom, function (lat, lng) {
+            selectedLat = lat; selectedLng = lng;
+        });
+    });
+
+    function flyToPlace(q, zoom, cb) {
+        fetch('https://nominatim.openstreetmap.org/search?q=' + encodeURIComponent(q) + '&format=json&limit=1')
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (res && res.length > 0) {
+                    var lat = parseFloat(res[0].lat), lng = parseFloat(res[0].lon);
+                    map.flyTo([lat, lng], zoom, { duration: 1.2 });
+                    if (cb) cb(lat, lng);
+                }
+            })
+            .catch(function () {});
+    }
+
+    // ── Haritaya tıklanınca il tespit ─────────────────────────────
+    map.on('click', function (e) {
+        document.getElementById('geocode-spinner').style.display = 'inline';
+        fetch('https://nominatim.openstreetmap.org/reverse?lat=' + e.latlng.lat + '&lon=' + e.latlng.lng + '&format=json&accept-language=tr')
+            .then(function (r) { return r.json(); })
+            .then(function (geo) {
+                document.getElementById('geocode-spinner').style.display = 'none';
+                var ilAdi = (geo.address || {}).province || (geo.address || {}).state || '';
+                var eslesme = findIl(ilAdi);
+                if (eslesme && document.getElementById('sel-il').value !== eslesme) {
+                    document.getElementById('sel-il').value = eslesme;
+                    document.getElementById('sel-il').dispatchEvent(new Event('change'));
+                }
+            })
+            .catch(function () {
+                document.getElementById('geocode-spinner').style.display = 'none';
+            });
+    });
+
+    function findIl(ilAdi) {
+        if (!ilAdi) return null;
+        var n = ilAdi.toLowerCase().replace(/\s*(province|ili)\s*/gi, '').trim();
+        var keys = Object.keys(ilIlceData);
+        for (var i = 0; i < keys.length; i++)
+            if (keys[i].toLowerCase() === n) return keys[i];
+        for (var i = 0; i < keys.length; i++) {
+            var k = keys[i].toLowerCase();
+            if (n.indexOf(k) !== -1 || k.indexOf(n) !== -1) return keys[i];
+        }
+        return null;
+    }
+
+    // ── Müşteri listesi ───────────────────────────────────────────
+    function refreshList() {
+        var il   = document.getElementById('sel-il').value;
+        var ilce = document.getElementById('sel-ilce').value;
+
+        var filtered = allCustomers.filter(function (c) {
+            if (il && c.City !== il) return false;
+            if (ilce && c.District !== ilce) return false;
+            return true;
+        });
+
+        document.getElementById('list-count').textContent = filtered.length;
+        var container = document.getElementById('customer-list-container');
+        Array.from(container.querySelectorAll('.customer-item')).forEach(function (el) { container.removeChild(el); });
+        var emptyMsg = document.getElementById('list-empty-msg');
+
+        if (filtered.length === 0) {
+            emptyMsg.style.display = 'block';
+            emptyMsg.innerHTML = il
+                ? '<i class="fa fa-search fa-2x mb-2 d-block" style="color:#ddd;"></i>Bu bölgede henüz müşteri yok'
+                : '<i class="fa fa-map-marker fa-2x mb-2 d-block" style="color:#ddd;"></i>İl ve ilçe seçin';
+            return;
+        }
+
+        emptyMsg.style.display = 'none';
+        filtered.forEach(function (c) {
+            var item = document.createElement('div');
+            item.className = 'customer-item';
+            item.innerHTML =
+                '<div class="ci-name">'
+                + '<span class="ci-edit" title="Düzenle"><i class="fa fa-pencil"></i></span>'
+                + '<i class="fa fa-user me-1 text-muted" style="font-size:10px;"></i>' + esc(c.CustomerName)
+                + '</div>'
+                + '<div class="ci-loc"><i class="fa fa-map-marker me-1"></i>' + esc(c.City || '') + (c.District ? ' / ' + esc(c.District) : '') + '</div>'
+                + (c.Phone ? '<div class="ci-phone"><i class="fa fa-phone me-1"></i>' + esc(c.Phone) + '</div>' : '');
+
+            // Düzenle butonu
+            item.querySelector('.ci-edit').addEventListener('click', function (e) {
+                e.stopPropagation();
+                openFormEdit(c);
+            });
+
+            // Satıra tıklayınca haritada göster
+            item.addEventListener('click', function () {
+                var coords = getMarkerCoords(c);
+                if (!coords) return;
+                var zoom = coords.approx ? 10 : 13;
+                map.flyTo([coords.lat, coords.lng], zoom, { duration: 1 });
+                allMarkers.eachLayer(function (layer) {
+                    if (layer.getLatLng &&
+                        Math.abs(layer.getLatLng().lat - coords.lat) < 0.0001 &&
+                        Math.abs(layer.getLatLng().lng - coords.lng) < 0.0001)
+                        layer.openPopup();
+                });
+            });
+            container.appendChild(item);
+        });
+    }
+
+    function makePopupHtml(c) {
+        return '<div class="customer-popup">'
+            + '<h6>' + esc(c.CustomerName) + '</h6>'
+            + (c.City ? '<p><i class="fa fa-map-marker me-1"></i>' + esc(c.City) + (c.District ? ' / ' + esc(c.District) : '') + '</p>' : '')
+            + (c.Phone ? '<p><i class="fa fa-phone me-1"></i>' + esc(c.Phone) + '</p>' : '')
+            + (c.Email ? '<p><i class="fa fa-envelope me-1"></i>' + esc(c.Email) + '</p>' : '')
+            + '<a class="popup-edit" data-id="' + (c.CustomerId || c.EntityId || '') + '"><i class="fa fa-pencil me-1"></i>Düzenle</a>'
+            + '</div>';
+    }
+
+    function getMarkerCoords(c) {
+        if (c.Latitude && c.Longitude)
+            return { lat: c.Latitude, lng: c.Longitude, approx: false };
+
+        var cityKey = (c.City || '').toLowerCase();
+        var distKey = (c.District || '').toLowerCase();
+        var center = null;
+        if (cityKey && distKey) center = approximateCenters[cityKey + '|' + distKey];
+        if (!center && cityKey) center = approximateCenters[cityKey];
+        if (!center) return null;
+        return { lat: center.lat, lng: center.lng, approx: true };
+    }
+
+    function addMarker(c) {
+        var coords = getMarkerCoords(c);
+        if (!coords) return;
+        var icon = coords.approx ? pinIconApprox : pinIcon;
+        var marker = L.marker([coords.lat, coords.lng], { icon: icon });
+        var popupHtml = makePopupHtml(c);
+        if (coords.approx)
+            popupHtml = popupHtml.replace('</div>', '<p style="font-size:10px;color:#e67e22;margin-top:4px;"><i class="fa fa-info-circle me-1"></i>Tahmini konum (il/ilçe merkezi)</p></div>');
+        marker.bindPopup(popupHtml, { maxWidth: 220 });
+        marker.on('popupopen', function () {
+            var el = marker.getPopup().getElement().querySelector('.popup-edit');
+            if (el) el.addEventListener('click', function () {
+                marker.closePopup();
+                openFormEdit(c);
+            });
+        });
+        marker.addTo(allMarkers);
+    }
+
+    function refreshMapMarkers() {
+        allMarkers.clearLayers();
+        allCustomers.forEach(addMarker);
+    }
+
+    // ── Tüm müşterileri yükle ─────────────────────────────────────
+    function loadAllCustomers() {
+        postJson('/Services/CustomerManagement/Customer/List', { Take: 10000 })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                allCustomers = data.Entities || [];
+                refreshMapMarkers();
+                refreshList();
+            })
+            .catch(function () {});
+    }
+
+    loadIlLayer();
+
+    loadAllCustomers();
+
+    // ── Form aç/kapat ─────────────────────────────────────────────
+    document.getElementById('btn-toggle-form').addEventListener('click', function () {
+        var form = document.getElementById('panel-form');
+        var isOpen = form.classList.contains('open');
+        if (isOpen) { closeForm(); return; }
+        openFormNew();
+    });
+
+    document.getElementById('btn-cancel-form').addEventListener('click', closeForm);
+
+    // Yeni müşteri formu
+    function openFormNew() {
+        resetFormFields();
+        document.getElementById('form-title').innerHTML =
+            '<i class="fa fa-user-plus me-1 text-success"></i>Yeni Müşteri';
+        document.getElementById('btn-save').innerHTML = '<i class="fa fa-save me-1"></i>Kaydet';
+        document.getElementById('btn-toggle-form').innerHTML = '<i class="fa fa-times me-1"></i>İptal';
+        document.getElementById('panel-form').classList.add('open');
+        document.getElementById('inp-name').focus();
+    }
+
+    // Mevcut müşteriyi düzenlemek için formu aç
+    function openFormEdit(c) {
+        resetFormFields();
+        document.getElementById('inp-customer-id').value = c.CustomerId || c.EntityId || '';
+        document.getElementById('inp-name').value     = c.CustomerName || '';
+        document.getElementById('inp-contact').value  = c.ContactName  || '';
+        document.getElementById('inp-phone').value    = c.Phone        || '';
+        document.getElementById('inp-email').value    = c.Email        || '';
+        document.getElementById('inp-city').value     = c.City         || '';
+        document.getElementById('inp-district').value = c.District     || '';
+        document.getElementById('inp-notes').value    = c.Notes        || '';
+        document.getElementById('form-title').innerHTML =
+            '<i class="fa fa-edit me-1 text-warning"></i>Müşteriyi Düzenle';
+        document.getElementById('btn-save').innerHTML = '<i class="fa fa-save me-1"></i>Güncelle';
+        document.getElementById('btn-toggle-form').innerHTML = '<i class="fa fa-times me-1"></i>İptal';
+        document.getElementById('panel-form').classList.add('open');
+        document.getElementById('inp-name').focus();
+        // Paneli en alta kaydır
+        document.getElementById('panel-form').scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+
+    function closeForm() {
+        document.getElementById('panel-form').classList.remove('open');
+        document.getElementById('btn-toggle-form').innerHTML = '<i class="fa fa-plus me-1"></i>Yeni Müşteri';
+        resetFormFields();
+    }
+
+    // ── Kaydet / Güncelle ─────────────────────────────────────────
+    document.getElementById('btn-save').addEventListener('click', function () {
+        var name = document.getElementById('inp-name').value.trim();
+        var customerId = document.getElementById('inp-customer-id').value;
+
+        document.getElementById('inp-name').classList.remove('is-invalid');
+        if (!name) { document.getElementById('inp-name').classList.add('is-invalid'); document.getElementById('inp-name').focus(); return; }
+
+        var btn = this;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa fa-spinner fa-spin me-1"></i>Kaydediliyor...';
+        document.getElementById('save-error').style.display = 'none';
+
+        var city     = document.getElementById('inp-city').value.trim()     || document.getElementById('sel-il').value   || null;
+        var district = document.getElementById('inp-district').value.trim() || document.getElementById('sel-ilce').value || null;
+
+        var entity = {
+            CustomerName: name,
+            ContactName:  document.getElementById('inp-contact').value.trim() || null,
+            Phone:        document.getElementById('inp-phone').value.trim()   || null,
+            Email:        document.getElementById('inp-email').value.trim()   || null,
+            Notes:        document.getElementById('inp-notes').value.trim()   || null,
+            City:         city,
+            District:     district,
+            Latitude:     selectedLat,
+            Longitude:    selectedLng
+        };
+
+        var isUpdate = !!customerId;
+        var url      = isUpdate
+            ? '/Services/CustomerManagement/Customer/Update'
+            : '/Services/CustomerManagement/Customer/Create';
+        var body     = isUpdate
+            ? { EntityId: parseInt(customerId), Entity: entity }
+            : { Entity: entity };
+
+        postJson(url, body)
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                btn.disabled = false;
+                btn.innerHTML = isUpdate
+                    ? '<i class="fa fa-save me-1"></i>Güncelle'
+                    : '<i class="fa fa-save me-1"></i>Kaydet';
+                if (data.Error) {
+                    document.getElementById('save-error').textContent = data.Error.Message || 'İşlem başarısız.';
+                    document.getElementById('save-error').style.display = 'block';
+                    return;
+                }
+                if (isUpdate) {
+                    // Listedeki kaydı güncelle
+                    for (var i = 0; i < allCustomers.length; i++) {
+                        if ((allCustomers[i].CustomerId || allCustomers[i].EntityId) == customerId) {
+                            Object.assign(allCustomers[i], entity);
+                            break;
+                        }
+                    }
+                    refreshMapMarkers();
+                } else {
+                    entity.CustomerId = data.EntityId;
+                    allCustomers.push(entity);
+                    if (selectedLat && selectedLng) addMarker(entity);
+                }
+                refreshList();
+                closeForm();
+            })
+            .catch(function () {
+                btn.disabled = false;
+                btn.innerHTML = isUpdate ? '<i class="fa fa-save me-1"></i>Güncelle' : '<i class="fa fa-save me-1"></i>Kaydet';
+                document.getElementById('save-error').textContent = 'Bağlantı hatası.';
+                document.getElementById('save-error').style.display = 'block';
+            });
+    });
+
+    function resetFormFields() {
+        ['inp-customer-id','inp-name','inp-contact','inp-phone','inp-email','inp-city','inp-district','inp-notes']
+            .forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el.tagName === 'TEXTAREA') el.value = '';
+                else el.value = '';
+                el.classList.remove('is-invalid');
+            });
+        document.getElementById('save-error').style.display = 'none';
+        selectedLat = null; selectedLng = null;
+    }
+
+})();
+</script>
